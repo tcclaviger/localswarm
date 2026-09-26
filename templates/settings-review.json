@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Glob",
+      "Grep",
+      "LSP",
+      "WebFetch",
+      "Skill",
+      "Agent(second-opinion)"
+    ],
+    "deny": [
+      "Edit",
+      "WebSearch",
+      "Workflow",
+      "Bash(pip *)",
+      "Bash(pip3 *)",
+      "Bash(python3 -m pip *)",
+      "Bash(python -m pip *)",
+      "Bash(uv *)",
+      "Bash(pipx *)",
+      "Bash(npm install -g *)",
+      "Bash(npm i -g *)",
+      "Bash(npm install --global *)",
+      "Bash(npm i --global *)",
+      "Bash(npm -g *)",
+      "Bash(npm link *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git reset *)",
+      "Bash(git checkout *)",
+      "Bash(sudo *)",
+      "Bash(systemctl *)",
+      "Bash(service *)",
+      "Bash(docker *)",
+      "Bash(pkill *)",
+      "Bash(killall *)",
+      "Agent(general-purpose)",
+      "Agent(Explore)",
+      "Agent(Plan)",
+      "Agent(claude)",
+      "Agent(fork)",
+      "Agent(statusline-setup)",
+      "Agent(claude-code-guide)"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "skipWebFetchPreflight": true,
+  "autoCompactEnabled": true
+}

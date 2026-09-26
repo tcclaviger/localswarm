@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+# never commit tokens or machine profiles
+.env
+profile.env
+# run artefacts if the kit folder is ever used as a workspace
+workingtemp/
+workingtemp-*.tar.gz

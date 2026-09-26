@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# claude-local — run a one-off, UNSANDBOXED Claude Code child against your model endpoint.
+# It uses your normal ~/.claude (agents, skills, hooks, CLAUDE.md); only the endpoint,
+# credential and model change. For fenced multi-agent work use swarm_run.sh instead.
+#
+#   claude-local "prompt" [--effort off|low|medium|high] [other claude -p flags...]
+#
+# Reads the localswarm profile (see profile.env.example). Two routes:
+#   bridge : if SWARM_BRIDGE_TCP_PORT is set, requests go through the localswarm bridge on
+#            127.0.0.1:<port> (started here if not running). The bridge adds the bearer token,
+#            translates OpenAI-format endpoints, handles any path prefix and --effort off.
+#   direct : otherwise Claude Code talks to SWARM_LLM_URL itself. This needs an Anthropic-format
+#            endpoint whose base ends in /v1; the token (if any) is read from SWARM_ENV_FILE and
+#            passed as ANTHROPIC_AUTH_TOKEN (sent as "Authorization: Bearer ...").
+# Why effort goes through CLAUDE_CODE_EFFORT_LEVEL: the CLI --effort flag only accepts its own
+# names, and some servers accept different ones (e.g. xhigh); with no effort set Claude Code
+# sends its own default, which some servers reject with HTTP 400.
+set -euo pipefail
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+# The bridge lives in the installed skill; claude-local itself is usually copied onto PATH.
+BRIDGE=$HERE/swarm_bridge.py
+[ -f "$BRIDGE" ] || BRIDGE=${LOCALSWARM_HOME:-$HOME/.claude/skills/localswarm}/scripts/swarm_bridge.py
+PROFILE=${LOCALSWARM_PROFILE:-${XDG_CONFIG_HOME:-$HOME/.config}/localswarm/profile.env}
+# shellcheck disable=SC1090
+if [ -f "$PROFILE" ]; then set -a; . "$PROFILE"; set +a; fi
+URL=${SWARM_LLM_URL:-http://127.0.0.1:8000/v1}; URL=${URL%/}
+FORMAT=${SWARM_API_FORMAT:-auto}
+EFFORT=${CLAUDE_LOCAL_EFFORT:-medium}
+EFFORT_MAP=${SWARM_EFFORT_MAP:-"low=low medium=medium high=high"}
+SOCK=${SWARM_SOCK_DIR:-${XDG_RUNTIME_DIR:-/tmp}/localswarm-$(id -u)}
+
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --effort) EFFORT=${2:?--effort needs a value}; shift 2 ;;
+    --effort=*) EFFORT=${1#--effort=}; shift ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+map_effort() { local pair; for pair in $EFFORT_MAP; do [ "${pair%%=*}" = "$1" ] && { echo "${pair#*=}"; return 0; }; done; return 1; }
+headers=""
+case "$EFFORT" in
+  off) LEVEL=$(map_effort low) || LEVEL=low; headers="X-Swarm-Thinking: off" ;;
+  low|medium|high) LEVEL=$(map_effort "$EFFORT") || { echo "claude-local: SWARM_EFFORT_MAP has no '$EFFORT'" >&2; exit 2; } ;;
+  *) echo "claude-local: effort must be off|low|medium|high" >&2; exit 2 ;;
+esac
+
+TOKEN=""
+if [ -n "${SWARM_BRIDGE_TCP_PORT:-}" ]; then
+  # ---- bridge route ----
+  BASE="http://127.0.0.1:$SWARM_BRIDGE_TCP_PORT"
+  if ! curl -s -m 3 -o /dev/null "$BASE/v1/models"; then
+    [ -S "$SOCK/llm.sock" ] && { echo "claude-local: a bridge is running in $SOCK without a TCP port; stop it (kill \"\$(cat $SOCK/bridge.pid)\") so it restarts with SWARM_BRIDGE_TCP_PORT" >&2; exit 3; }
+    bargs=(--sock-dir "$SOCK" --llm-url "$URL" --tcp-port "$SWARM_BRIDGE_TCP_PORT")
+    for s in ${SWARM_BLOCK_SUFFIXES:-}; do bargs+=(--block-suffix "$s"); done
+    mkdir -p "$SOCK"; chmod 700 "$SOCK"
+    [ -f "$BRIDGE" ] || { echo "claude-local: swarm_bridge.py not found (set LOCALSWARM_HOME to the skill folder)" >&2; exit 3; }
+    setsid nohup python3 "$BRIDGE" "${bargs[@]}" >> "$SOCK/bridge.out" 2>&1 < /dev/null &
+    for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null "$BASE/v1/models" && break; sleep 0.5; done
+  fi
+  LISTURL="$BASE/v1/models"; AUTHHDR=()
+else
+  # ---- direct route ----
+  [ "$EFFORT" = off ] && { echo "claude-local: --effort off needs the bridge: set SWARM_BRIDGE_TCP_PORT" >&2; exit 2; }
+  [ "$FORMAT" = openai ] && { echo "claude-local: OpenAI-format endpoints need the bridge: set SWARM_BRIDGE_TCP_PORT" >&2; exit 2; }
+  case "$URL" in */v1) BASE=${URL%/v1} ;; *) echo "claude-local: direct mode needs a base URL ending in /v1 (got $URL); set SWARM_BRIDGE_TCP_PORT to use the bridge" >&2; exit 2 ;; esac
+  envf=${SWARM_ENV_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/localswarm/.env}
+  var=${SWARM_TOKEN_VAR:-SWARM_API_TOKEN}
+  TOKEN=${!var:-}
+  if [ -z "$TOKEN" ] && [ -f "$envf" ]; then
+    TOKEN=$(python3 -c '
+import sys
+path, var = sys.argv[1], sys.argv[2]
+for line in open(path):
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    k, v = line.split("=", 1)
+    k = k.strip()
+    k = k[7:].strip() if k.startswith("export ") else k
+    if k == var:
+        v = v.strip()
+        print(v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'\''" else v)
+        break' "$envf" "$var")
+  fi
+  LISTURL="$URL/models"; AUTHHDR=()
+  [ -n "$TOKEN" ] && AUTHHDR=(-H "Authorization: Bearer $TOKEN")
+fi
+
+models=$(curl -s -m 10 "${AUTHHDR[@]}" "$LISTURL" || true)
+[ -n "$models" ] || { echo "claude-local: no model list from $LISTURL" >&2; exit 1; }
+MODEL=${SWARM_MODEL:-$(printf '%s' "$models" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])')} \
+  || { echo "claude-local: could not read a model id from $LISTURL (wrong URL or token?)" >&2; exit 1; }
+
+exec env \
+  ANTHROPIC_BASE_URL="$BASE" ANTHROPIC_AUTH_TOKEN="${TOKEN:-local}" ANTHROPIC_MODEL="$MODEL" \
+  ANTHROPIC_DEFAULT_OPUS_MODEL="$MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$MODEL" ANTHROPIC_DEFAULT_HAIKU_MODEL="$MODEL" \
+  ANTHROPIC_CUSTOM_HEADERS="$headers" CLAUDE_CODE_EFFORT_LEVEL="$LEVEL" \
+  CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+  claude -p "${args[@]}"
