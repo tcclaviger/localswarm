@@ -100,11 +100,18 @@ Facts to know:
    no `/home` or `/run` visible; admin route to the model server denied by the bridge; loopback
    port refused; npm registry reachable; global npm and pip denied; `ps` shows only sandbox
    processes; WebFetch works; `second-opinion` answers; `general-purpose` is denied.
-3. Run one effort `high` and one effort `off` agent with a trivial prompt; confirm both succeed
+3. **Python venv check** (the smoke test does not cover it):
+   `scripts/swarm_run.sh --ws <ws> --name pycheck --exec 'python3 -m venv <ws>/venvtest && <ws>/venvtest/bin/pip install -q six && <ws>/venvtest/bin/python -c "import six"'`
+   It must exit 0. If it fails with `No module named 'encodings'`, python3 is a relocated build
+   outside `/usr` (pyenv, asdf, uv-managed, ...): the sandbox mounts it at `/opt/swarm/tc/N`, but a
+   venv made from it looks for the stdlib at the build's compiled-in prefix, which is not mounted.
+   Fix it in the profile: add the host's `python3 -c 'import sys; print(sys.base_prefix)'` to
+   `SWARM_EXTRA_RO` (mounted read-only). Re-run the check, then delete `<ws>/venvtest`.
+4. Run one effort `high` and one effort `off` agent with a trivial prompt; confirm both succeed
    and that the `off` run's stream log has no thinking blocks.
-4. Show the user `bridge.log` from the smoke run (its "bridge up" line shows upstream, format and
+5. Show the user `bridge.log` from the smoke run (its "bridge up" line shows upstream, format and
    `auth=yes/no`, never the token).
-5. If a token is in use: search the scratch workspace and the bridge's socket folder for the
+6. If a token is in use: search the scratch workspace and the bridge's socket folder for the
    token string (do not print the token itself; report only the count). The count must be 0.
 
 ## Part D — tailor
@@ -114,6 +121,7 @@ they ask:
 - **Languages/stacks.** Settings allow/deny lists in `templates/settings-*.json` (e.g. allow
   `Bash(.venv/bin/pip *)` for Python projects that use an in-workspace venv; add build tools).
 - **Toolchains outside /usr** (SDKs, JDKs, Android SDK): `SWARM_EXTRA_RO` and `SWARM_EXTRA_TOOLS`.
+  A pyenv/asdf python also needs its `sys.base_prefix` in `SWARM_EXTRA_RO`, or venvs break (Part C3).
 - **Network policy.** Keep public-HTTPS-only, or tighten `swarm_bridge.py` to an allow-list
   (package registry + chosen docs sites) if data leaving the machine is a concern.
 - **Effort defaults** in the SKILL.md table if their model behaves differently.
