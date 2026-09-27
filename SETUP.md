@@ -113,6 +113,10 @@ Facts to know:
    `auth=yes/no`, never the token).
 6. If a token is in use: search the scratch workspace and the bridge's socket folder for the
    token string (do not print the token itself; report only the count). The count must be 0.
+7. Ask the user: remove the scratch workspace now, or view its contents first? It holds the smoke
+   report (`workingtemp/logs/smoke.result`), each agent's stream log and result in
+   `workingtemp/logs/`, and any `tickets/` if a board was run. If they want to view, show what they
+   ask for, then ask again. Remove it only after they say so (`rm -rf <ws>`).
 
 ## Part D — tailor
 
